@@ -43,6 +43,7 @@ from .subagents import (
     ProfilerFindings,
     RetrievedKnowledge,
     StrategyDecision,
+    WorkloadProfile,
 )
 from .tools import RunContext, build_popcorn_cmd, build_tool_server
 
@@ -96,6 +97,7 @@ class RunReport:
     stopped_reason: str = ""
     submitted: bool = False
     brief: ProblemBrief | None = None
+    workload: WorkloadProfile | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -177,6 +179,7 @@ class Orchestrator:
         self._max_iterations_safety = max_iterations_safety
         self._stop_event = asyncio.Event()
         self._run_id = time.strftime("%Y%m%d-%H%M%S")
+        self._workload: WorkloadProfile | None = None
 
     def request_stop(self) -> None:
         """Signal the loop to stop after the current iteration (TUI 'force stop')."""
@@ -198,6 +201,19 @@ class Orchestrator:
         brief = await subagents.understand_problem(runner, problem)
         self.emit("brief", summary=brief.summary)
 
+        # Analyze the input distribution for exploitable structure (split-K,
+        # padding-exit, per-regime dispatch, trivializing shapes). Best-effort —
+        # a failure here shouldn't abort the run.
+        try:
+            self._workload = await subagents.inspect_workload(runner, problem, brief)
+            self.emit(
+                "workload", summary=self._workload.summary,
+                shortcuts=len(self._workload.shortcuts),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.emit("workload_error", error=str(exc))
+            self._workload = None
+
         reference_ns = await self._establish_baseline(problem)
         self.emit("baseline", reference_ns=reference_ns)
 
@@ -205,7 +221,10 @@ class Orchestrator:
             runner, brief, self._library_candidates(brief)
         )
 
-        report = RunReport(problem=problem.name, reference_ns=reference_ns, brief=brief)
+        report = RunReport(
+            problem=problem.name, reference_ns=reference_ns, brief=brief,
+            workload=self._workload,
+        )
         best: CandidateRecord | None = None
         start = time.monotonic()
         it_index = 0
@@ -370,6 +389,7 @@ class Orchestrator:
             hardware_notes=self._hardware_notes(),
             prior_summary=prior_summary,
             profiler=profiler,
+            workload=self._workload,
         )
         return CandidateRecord(id=cid, approach=approach, workspace=ws, candidate=candidate)
 
@@ -422,6 +442,7 @@ class Orchestrator:
             hardware_notes=self._hardware_notes(),
             prior_summary=prior,
             profiler=profiler,
+            workload=self._workload,
         )
         return CandidateRecord(id=cid, approach=approach, workspace=ws, candidate=candidate)
 

@@ -1,0 +1,15 @@
+kernel-harness
+Copyright 2026 Anurag Jain
+
+This product includes curated GPU-optimization knowledge derived from:
+
+  auto-gpu-kernel — https://github.com/Dogacel/auto-gpu-kernel
+  Copyright (c) Doğaç Eldenk
+  Licensed under the Apache License, Version 2.0.
+
+The transferable Blackwell/Triton optimization lessons seeded into the
+knowledge library (see src/kernel_harness/seeds.py) are paraphrased from that
+project's experiments/LESSONS.md. Problem-specific findings were not included.
+A copy of the Apache 2.0 license is available at:
+
+  http://www.apache.org/licenses/LICENSE-2.0

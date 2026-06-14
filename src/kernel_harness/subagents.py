@@ -108,6 +108,45 @@ class ProblemBrief:
 
 
 @dataclass
+class WorkloadProfile:
+    """Structure in the problem's *input distribution* worth exploiting.
+
+    Analyzing inputs (shapes, sparsity, padding, value ranges) for regime-specific
+    shortcuts is often the single biggest structural lever — e.g. an SM-starved
+    grid that wants split-K, or a mostly-padded input that wants an early exit.
+    """
+
+    summary: str = ""
+    regimes: list[str] = field(default_factory=list)            # distinct input regimes
+    exploitable_structure: list[str] = field(default_factory=list)
+    shortcuts: list[str] = field(default_factory=list)          # concrete, actionable
+    notes: str = ""
+    raw: SubagentResult | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WorkloadProfile":
+        return cls(
+            summary=str(d.get("summary", "")),
+            regimes=[str(x) for x in _as_list(d.get("regimes"))],
+            exploitable_structure=[str(x) for x in _as_list(d.get("exploitable_structure"))],
+            shortcuts=[str(x) for x in _as_list(d.get("shortcuts"))],
+            notes=str(d.get("notes", "")),
+        )
+
+    def as_block(self) -> str:
+        if not (self.exploitable_structure or self.shortcuts):
+            return ""
+        parts = ["\nWorkload structure to exploit:"]
+        if self.summary:
+            parts.append(f"- {self.summary}")
+        for s in self.exploitable_structure:
+            parts.append(f"- structure: {s}")
+        for s in self.shortcuts:
+            parts.append(f"- shortcut: {s}")
+        return "\n".join(parts)
+
+
+@dataclass
 class RetrievedKnowledge:
     techniques: list[str] = field(default_factory=list)
     rationale: str = ""
@@ -209,6 +248,18 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "```json code block with keys: summary, dtype, input_spec, output_spec, "
         "tolerance, kernel_signature, constraints (list), optimization_targets (list)."
     ),
+    "workload_inspector": (
+        "You analyze the INPUT DISTRIBUTION of a GPU MODE problem to find "
+        "regime-specific shortcuts a kernel can exploit. Study the reference "
+        "implementation, the input generator (generate_input), and the test/benchmark "
+        "sizes. Look for: small grids that leave SMs idle (want split-K/flash-decoding), "
+        "heavy padding or sparsity (want early-exit), size-1 axes or trivializing shapes, "
+        "bimodal size regimes that want per-regime dispatch, contiguous/aligned structure, "
+        "and value ranges affecting numerics. Be concrete and quantitative where the "
+        "sizes allow. Respond with a single JSON object in a ```json code block with keys: "
+        "summary, regimes (list), exploitable_structure (list), shortcuts (list of concrete "
+        "actionable strings), notes."
+    ),
     "library_retrieval": (
         "You are a GPU optimization librarian. Given a problem brief and a set of "
         "candidate notes from prior hackathons (techniques, winning kernels, failed "
@@ -288,6 +339,18 @@ def build_understand_prompt(problem: Problem) -> str:
     )
 
 
+def build_inspect_prompt(problem: Problem, brief: ProblemBrief) -> str:
+    sizes = ""
+    if problem.tests or problem.benchmarks:
+        sizes = (
+            f"\nTest sizes: {problem.tests}\nBenchmark sizes: {problem.benchmarks}"
+        )
+    return (
+        f"{_brief_block(brief)}\n\nAnalyze the input distribution for exploitable "
+        f"structure.{sizes}\n\n{problem.as_prompt_context()}"
+    )
+
+
 def build_retrieve_prompt(brief: ProblemBrief, candidate_entries: list[str]) -> str:
     if candidate_entries:
         entries = "\n\n".join(f"[{i}] {e}" for i, e in enumerate(candidate_entries))
@@ -305,11 +368,16 @@ def build_write_prompt(
     hardware_notes: str = "",
     prior_summary: str = "",
     profiler: ProfilerFindings | None = None,
+    workload: "WorkloadProfile | None" = None,
 ) -> str:
     parts = [_brief_block(brief)]
     parts.append(f"\nTarget GPU: {gpu or 'unspecified'}")
     if hardware_notes:
         parts.append(f"Hardware notes: {hardware_notes}")
+    if workload is not None:
+        block = workload.as_block()
+        if block:
+            parts.append(block)
     if approach:
         parts.append(f"\nUse this approach for this candidate: {approach}")
     if knowledge and knowledge.techniques:
@@ -372,6 +440,20 @@ async def understand_problem(runner: AgentRunner, problem: Problem) -> ProblemBr
     return brief
 
 
+async def inspect_workload(
+    runner: AgentRunner, problem: Problem, brief: ProblemBrief
+) -> WorkloadProfile:
+    res = await runner.run_subagent(
+        "workload_inspector",
+        build_inspect_prompt(problem, brief),
+        system_prompt=SYSTEM_PROMPTS["workload_inspector"],
+        allowed_tools=[],
+    )
+    profile = WorkloadProfile.from_dict(parse_json_block(res.text))
+    profile.raw = res
+    return profile
+
+
 async def retrieve_knowledge(
     runner: AgentRunner,
     brief: ProblemBrief,
@@ -402,6 +484,7 @@ async def write_kernel(
     hardware_notes: str = "",
     prior_summary: str = "",
     profiler: ProfilerFindings | None = None,
+    workload: WorkloadProfile | None = None,
     on_text=None,
 ) -> KernelCandidate:
     res = await runner.run_subagent(
@@ -414,6 +497,7 @@ async def write_kernel(
             hardware_notes=hardware_notes,
             prior_summary=prior_summary,
             profiler=profiler,
+            workload=workload,
         ),
         system_prompt=SYSTEM_PROMPTS["kernel_writer"],
         allowed_tools=allowed_tools,

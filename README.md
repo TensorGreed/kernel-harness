@@ -74,6 +74,13 @@ To run purely on subscription credit, make sure `ANTHROPIC_API_KEY` is **unset**
 
 ## First run
 
+Seed the knowledge library with curated, transferable Blackwell/Triton lessons
+(optional but recommended — makes the first run smarter):
+
+```bash
+kernel-harness seed-library
+```
+
 List the available leaderboard problems (canonical names):
 
 ```bash
@@ -146,8 +153,16 @@ The kernel writer and profiler always run on Claude (they need the tool loop).
 
 Lessons (techniques, winning kernels, failed approaches) are distilled at the
 end of each run and stored under `library/` as editable JSON, indexed for
-retrieval on future runs. It grows with every hackathon. Disable per-run with
-`--no-library`.
+retrieval on future runs. It grows with every hackathon. Seed it with
+`kernel-harness seed-library` (curated Blackwell/Triton lessons; see `NOTICE`
+for attribution). Disable per-run with `--no-library`.
+
+## Acknowledgements
+
+The seeded optimization lessons are paraphrased from
+[Dogacel/auto-gpu-kernel](https://github.com/Dogacel/auto-gpu-kernel) (Apache-2.0,
+© Doğaç Eldenk) — the winning agent-only entry of the MLSys 2026 FlashInfer
+kernel-generation contest. See `NOTICE`.
 
 ## Development
 

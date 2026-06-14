@@ -108,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("list", help="list all known leaderboard problem names")
+
+    seed = sub.add_parser("seed-library", help="populate the library with curated Blackwell/Triton lessons")
+    seed.add_argument("--library-dir", default="library", help="library directory to seed")
     return p
 
 
@@ -231,9 +234,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return _cmd_list()
+    if args.command == "seed-library":
+        return _cmd_seed(args)
     if args.command == "run":
         return _cmd_run(args)
     return 2
+
+
+def _cmd_seed(args: argparse.Namespace) -> int:
+    from .library import Library
+    from .seeds import seed_library
+
+    lib = Library(args.library_dir)
+    n = seed_library(lib)
+    print(f"seeded {n} entries into {args.library_dir} ({len(lib)} total, index: {lib.index_kind})")
+    return 0
 
 
 def _cmd_list() -> int:

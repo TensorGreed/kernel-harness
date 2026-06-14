@@ -204,6 +204,7 @@ class StoppingConditions:
 DEFAULT_MODEL_ROUTING: dict[str, str] = {
     "orchestrator": "claude-sonnet-4-6",
     "problem_understander": "claude-haiku-4-5",
+    "workload_inspector": "claude-sonnet-4-6",
     "library_retrieval": "claude-sonnet-4-6",
     "kernel_writer": "claude-opus-4-8",
     "profiler_interpreter": "claude-opus-4-8",
@@ -216,6 +217,7 @@ DEFAULT_MODEL_ROUTING: dict[str, str] = {
 DEFAULT_EFFORT_ROUTING: dict[str, str] = {
     "orchestrator": "medium",
     "problem_understander": "low",
+    "workload_inspector": "medium",
     "library_retrieval": "medium",
     "kernel_writer": "high",
     "profiler_interpreter": "high",
@@ -231,6 +233,7 @@ DEFAULT_EFFORT_ROUTING: dict[str, str] = {
 DEFAULT_BACKEND_ROUTING: dict[str, str] = {
     "orchestrator": "cloud",
     "problem_understander": "local",
+    "workload_inspector": "cloud",
     "library_retrieval": "local",
     "kernel_writer": "cloud",       # needs the MCP tool loop + top quality
     "profiler_interpreter": "cloud",  # needs tools (ncu/run_local)

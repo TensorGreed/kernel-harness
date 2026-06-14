@@ -12,6 +12,9 @@ runs/
 *.ncu-rep
 *.nsys-rep
 .chroma/
+# Knowledge library is runtime state — seed it with `kernel-harness seed-library`.
+# The curated seed content lives in src/kernel_harness/seeds.py (committed).
+library/
 
 # Secrets
 .env
