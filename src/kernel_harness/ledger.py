@@ -129,6 +129,11 @@ class Ledger:
         notes = []
         if it_record.profiler is not None and it_record.profiler.bottleneck:
             notes.append(f"profiler: {it_record.profiler.bottleneck}")
+        if getattr(it_record, "trigger", None):
+            notes.append(f"STUCK ({it_record.trigger})")
+        if getattr(it_record, "research", None) is not None:
+            r = it_record.research
+            notes.append(f"research: {r.strategy} — {r.diagnosis}")
         if it_record.decision is not None:
             d = it_record.decision
             extra = f" — {d.focus}" if d.focus else ""

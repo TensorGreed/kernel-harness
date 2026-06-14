@@ -59,6 +59,8 @@ def format_log_line(name: str, payload: dict) -> str | None:
             return None  # shown in the table
         case "candidate_failed":
             return f"✗ {payload.get('approach')} failed: {payload.get('error')}"
+        case "research":
+            return f"research triggered: {payload.get('trigger')}"
         case "decision":
             return f"strategy: {payload.get('action')} — {payload.get('focus', '')}"
         case "notice":

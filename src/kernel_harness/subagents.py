@@ -199,6 +199,42 @@ class ProfilerFindings:
 
 
 @dataclass
+class ResearchPlan:
+    """Deep, clean-context diagnosis produced when the loop is stuck.
+
+    Fired only on plateau / correctness-wall triggers — the expensive, rare
+    "step back and rethink" call. Drives the next rewrite (its actions + focus)
+    and warns the kernel writer off known dead-ends (do_not_try).
+    """
+
+    diagnosis: str = ""
+    strategy: str = ""              # "pivot" | "refactor" | "targeted"
+    actions: list[str] = field(default_factory=list)
+    do_not_try: list[str] = field(default_factory=list)
+    raw: SubagentResult | None = None
+
+    @property
+    def focus(self) -> str:
+        return self.actions[0] if self.actions else self.diagnosis
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ResearchPlan":
+        def _render(a: object) -> str:
+            if isinstance(a, dict):
+                what = str(a.get("what", "")).strip()
+                why = str(a.get("why", "")).strip()
+                return f"{what} ({why})" if why else what
+            return str(a)
+
+        return cls(
+            diagnosis=str(d.get("diagnosis", "")),
+            strategy=str(d.get("strategy", "")),
+            actions=[_render(x) for x in _as_list(d.get("actions"))],
+            do_not_try=[str(x) for x in _as_list(d.get("do_not_try"))],
+        )
+
+
+@dataclass
 class StrategyDecision:
     action: str = "iterate"          # "iterate" | "submit" | "stop"
     reasoning: str = ""
@@ -298,9 +334,32 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "leaderboard timings, profiler findings), decide what to do next to win. "
         "Choose 'iterate' (keep optimizing — say what to focus on next), 'submit' "
         "(the current best is ready for a ranked leaderboard submission), or 'stop' "
-        "(diminishing returns or blocked). Be decisive and specific. Respond with a "
-        "single JSON object in a ```json code block with keys: action "
+        "(diminishing returns or blocked). Judge a direction by its CEILING, not its "
+        "iteration-0 number — a fresh approach is slower at first than a mature one. "
+        "If a research plan is provided, weigh it heavily. Be decisive and specific. "
+        "Respond with a single JSON object in a ```json code block with keys: action "
         "('iterate'|'submit'|'stop'), reasoning, next_approach, focus."
+    ),
+    "research": (
+        "You are a clean-context GPU performance researcher. You have NO memory of the "
+        "optimizer's recent attempts — form conclusions only from the artifacts given "
+        "(the experiment ledger, the current best kernel, the library lessons). The loop "
+        "has stalled; diagnose why and write the next plan. Do not write kernel code.\n\n"
+        "Run this pathology checklist and name the most likely root cause(s), citing "
+        "specific experiments from the ledger: (1) repetition loop — variants of the same "
+        "idea; (2) local minimum — many small-gain attempts on one design; (3) correctness "
+        "wall — numerical/algorithmic (check dtype/accumulator, softmax masking, LSE base, "
+        "tf32x3->ieee); (4) wrong bottleneck — optimizing compute on a memory-bound kernel "
+        "or vice versa (if no profiling exists, recommend it first); (5) missing fundamental "
+        "— a standard technique never tried (split-K/flash-decoding, online softmax, kernel "
+        "fusion, buffer reuse); (6) over-engineering — complexity blocking progress; "
+        "(7) overlooked shortcut — an input shape that trivializes the op.\n\n"
+        "Judge directions by their CEILING, not current numbers — recommend a pivot when the "
+        "current approach's ceiling is below an alternative's. Be concrete: name the function/"
+        "tile/constant to change, not 'improve memory access'. Respond with a single JSON "
+        "object in a ```json code block with keys: diagnosis, strategy ('pivot'|'refactor'|"
+        "'targeted'), actions (priority-ordered list of concrete changes), do_not_try (list "
+        "of dead-ends to avoid, citing experiments)."
     ),
     "library_updater": (
         "You curate a cross-hackathon knowledge library. Given the outcome of a run, "
@@ -369,6 +428,7 @@ def build_write_prompt(
     prior_summary: str = "",
     profiler: ProfilerFindings | None = None,
     workload: "WorkloadProfile | None" = None,
+    research: "ResearchPlan | None" = None,
 ) -> str:
     parts = [_brief_block(brief)]
     parts.append(f"\nTarget GPU: {gpu or 'unspecified'}")
@@ -378,6 +438,13 @@ def build_write_prompt(
         block = workload.as_block()
         if block:
             parts.append(block)
+    if research is not None and (research.actions or research.do_not_try):
+        rp = [f"\nResearch plan (address this — diagnosis: {research.diagnosis}; strategy: {research.strategy}):"]
+        for a in research.actions:
+            rp.append(f"- do: {a}")
+        for d in research.do_not_try:
+            rp.append(f"- do NOT try (dead end): {d}")
+        parts.append("\n".join(rp))
     if approach:
         parts.append(f"\nUse this approach for this candidate: {approach}")
     if knowledge and knowledge.techniques:
@@ -411,10 +478,35 @@ def build_profile_prompt(brief: ProblemBrief, *, gpu: str = "", hardware_notes: 
     )
 
 
-def build_reflect_prompt(brief: ProblemBrief, history: str) -> str:
+def build_reflect_prompt(
+    brief: ProblemBrief, history: str, research: "ResearchPlan | None" = None
+) -> str:
+    extra = ""
+    if research is not None and research.diagnosis:
+        extra = (
+            f"\n\nA research diagnosis is available — weigh it heavily:\n"
+            f"- diagnosis: {research.diagnosis}\n- strategy: {research.strategy}\n"
+            f"- recommended: {'; '.join(research.actions) or '(none)'}"
+        )
     return (
-        f"{_brief_block(brief)}\n\nIteration history so far:\n{history}\n\n"
+        f"{_brief_block(brief)}\n\nIteration history so far:\n{history}{extra}\n\n"
         "Decide the next action to maximize leaderboard performance."
+    )
+
+
+def build_research_prompt(
+    brief: ProblemBrief, ledger_text: str, best_code: str, library_notes: list[str]
+) -> str:
+    notes = "\n- ".join(library_notes) if library_notes else "(none)"
+    code = best_code.strip()
+    if len(code) > 6000:
+        code = code[:6000] + "\n# … (truncated)"
+    return (
+        f"{_brief_block(brief)}\n\n"
+        f"Experiment ledger so far:\n{ledger_text}\n\n"
+        f"Current best kernel:\n```python\n{code or '(none yet)'}\n```\n\n"
+        f"Relevant library lessons:\n- {notes}\n\n"
+        "The loop has stalled. Diagnose the root cause and write the next plan."
     )
 
 
@@ -485,6 +577,7 @@ async def write_kernel(
     prior_summary: str = "",
     profiler: ProfilerFindings | None = None,
     workload: WorkloadProfile | None = None,
+    research: ResearchPlan | None = None,
     on_text=None,
 ) -> KernelCandidate:
     res = await runner.run_subagent(
@@ -498,6 +591,7 @@ async def write_kernel(
             prior_summary=prior_summary,
             profiler=profiler,
             workload=workload,
+            research=research,
         ),
         system_prompt=SYSTEM_PROMPTS["kernel_writer"],
         allowed_tools=allowed_tools,
@@ -532,16 +626,39 @@ async def interpret_profile(
     return findings
 
 
-async def reflect(runner: AgentRunner, brief: ProblemBrief, history: str) -> StrategyDecision:
+async def reflect(
+    runner: AgentRunner,
+    brief: ProblemBrief,
+    history: str,
+    research: ResearchPlan | None = None,
+) -> StrategyDecision:
     res = await runner.run_subagent(
         "reflection",
-        build_reflect_prompt(brief, history),
+        build_reflect_prompt(brief, history, research),
         system_prompt=SYSTEM_PROMPTS["reflection"],
         allowed_tools=[],
     )
     decision = StrategyDecision.from_dict(parse_json_block(res.text))
     decision.raw = res
     return decision
+
+
+async def research(
+    runner: AgentRunner,
+    brief: ProblemBrief,
+    ledger_text: str,
+    best_code: str,
+    library_notes: list[str],
+) -> ResearchPlan:
+    res = await runner.run_subagent(
+        "research",
+        build_research_prompt(brief, ledger_text, best_code, library_notes),
+        system_prompt=SYSTEM_PROMPTS["research"],
+        allowed_tools=[],
+    )
+    plan = ResearchPlan.from_dict(parse_json_block(res.text))
+    plan.raw = res
+    return plan
 
 
 async def update_library(runner: AgentRunner, brief: ProblemBrief, outcome: str) -> LibraryEntries:

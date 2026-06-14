@@ -190,6 +190,8 @@ def _make_event_printer():
             emit(f"  {status} {payload['id']} ({payload['approach']}): speedup={spd_s}")
         elif name == "candidate_failed":
             emit(f"  ✗ {payload['approach']} failed: {payload['error']}")
+        elif name == "research":
+            emit(f"  [magenta]research triggered[/] — {payload.get('trigger','')}")
         elif name == "decision":
             emit(f"  strategy: [yellow]{payload['action']}[/] — {payload.get('focus','')}")
         elif name == "notice":

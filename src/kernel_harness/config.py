@@ -209,6 +209,7 @@ DEFAULT_MODEL_ROUTING: dict[str, str] = {
     "kernel_writer": "claude-opus-4-8",
     "profiler_interpreter": "claude-opus-4-8",
     "reflection": "claude-opus-4-8",
+    "research": "claude-opus-4-8",
     "library_updater": "claude-haiku-4-5",
 }
 
@@ -222,6 +223,7 @@ DEFAULT_EFFORT_ROUTING: dict[str, str] = {
     "kernel_writer": "high",
     "profiler_interpreter": "high",
     "reflection": "high",
+    "research": "high",
     "library_updater": "low",
 }
 
@@ -238,6 +240,7 @@ DEFAULT_BACKEND_ROUTING: dict[str, str] = {
     "kernel_writer": "cloud",       # needs the MCP tool loop + top quality
     "profiler_interpreter": "cloud",  # needs tools (ncu/run_local)
     "reflection": "cloud",
+    "research": "cloud",
     "library_updater": "local",
 }
 

@@ -42,6 +42,7 @@ from .subagents import (
     KernelCandidate,
     ProblemBrief,
     ProfilerFindings,
+    ResearchPlan,
     RetrievedKnowledge,
     StrategyDecision,
     WorkloadProfile,
@@ -87,6 +88,8 @@ class IterationRecord:
     best_id: str | None = None
     profiler: ProfilerFindings | None = None
     decision: StrategyDecision | None = None
+    research: ResearchPlan | None = None
+    trigger: str | None = None       # why research was fired this iteration
 
 
 @dataclass
@@ -124,6 +127,50 @@ def select_best(records: list[CandidateRecord]) -> CandidateRecord | None:
     if timed:
         return min(timed, key=lambda r: r.outcome.geomean_ns)  # type: ignore[arg-type]
     return correct[0]
+
+
+def detect_stuck(
+    iterations: list[IterationRecord],
+    *,
+    plateau_window: int = 4,
+    plateau_pct: float = 0.05,
+    fail_window: int = 3,
+) -> str | None:
+    """Return a trigger reason if the loop is stuck, else None (pure).
+
+    Two robust, computable triggers — the cue to fire the expensive research
+    agent instead of routine reflection:
+    * **correctness wall** — the last ``fail_window`` iterations produced no
+      passing candidate.
+    * **plateau** — the running-best speedup improved < ``plateau_pct`` over the
+      last ``plateau_window`` iterations.
+    """
+    if not iterations:
+        return None
+
+    # Correctness wall.
+    if len(iterations) >= fail_window:
+        recent = iterations[-fail_window:]
+        if all(not any(c.outcome.passed for c in it.candidates) for it in recent):
+            return f"correctness wall: no passing candidate in {fail_window} iterations"
+
+    # Running-best speedup per iteration.
+    best_seq: list[float] = []
+    cur = 0.0
+    for it in iterations:
+        for c in it.candidates:
+            if c.outcome.passed and c.outcome.speedup:
+                cur = max(cur, c.outcome.speedup)
+        best_seq.append(cur)
+
+    if len(best_seq) > plateau_window:
+        prev, now = best_seq[-1 - plateau_window], best_seq[-1]
+        if prev > 0 and (now / prev - 1.0) < plateau_pct:
+            return (
+                f"plateau: best speedup improved <{plateau_pct:.0%} "
+                f"over {plateau_window} iterations"
+            )
+    return None
 
 
 def render_history(iterations: list[IterationRecord], reference_ns: float | None) -> str:
@@ -252,8 +299,20 @@ class Orchestrator:
                 # Profile the best, then decide, then (maybe) a focused rewrite.
                 profiler = await self._profile_best(runner, problem, brief, best)
                 it_record.profiler = profiler
+
+                # Cheap per-iteration decision; fire the expensive clean-context
+                # research agent ONLY when a plateau / correctness-wall trigger
+                # fires — deep diagnosis when stuck, not every iteration.
+                research_plan = None
+                trigger = detect_stuck(report.iterations)
+                if trigger:
+                    it_record.trigger = trigger
+                    self.emit("research", trigger=trigger)
+                    research_plan = await self._run_research(runner, problem, brief, best)
+                    it_record.research = research_plan
+
                 decision = await subagents.reflect(
-                    runner, brief, self._ledger.render()
+                    runner, brief, self._ledger.render(), research_plan
                 )
                 it_record.decision = decision
                 self.emit("decision", action=decision.action, focus=decision.focus)
@@ -265,7 +324,7 @@ class Orchestrator:
                         await self._maybe_submit(problem, best, report)
                     break
                 record = await self._rewrite(
-                    runner, problem, brief, knowledge, best, profiler, decision
+                    runner, problem, brief, knowledge, best, profiler, decision, research_plan
                 )
                 records = [record]
 
@@ -339,6 +398,28 @@ class Orchestrator:
             return self._fetcher.fetch(self.config.leaderboard)
         with ProblemFetcher() as f:
             return f.fetch(self.config.leaderboard)
+
+    async def _run_research(
+        self,
+        runner: AgentRunner,
+        problem: Problem,
+        brief: ProblemBrief,
+        best: CandidateRecord | None,
+    ) -> ResearchPlan | None:
+        """Deep clean-context diagnosis from on-disk artifacts. Best-effort."""
+        try:
+            best_code = ""
+            if best is not None:
+                sub = best.workspace / problem.submission_filename
+                if sub.exists():
+                    best_code = sub.read_text()
+            notes = self._library_candidates(brief)
+            return await subagents.research(
+                runner, brief, self._ledger.render() if self._ledger else "", best_code, notes
+            )
+        except Exception as exc:  # noqa: BLE001 — never abort a run on diagnosis
+            self.emit("research_error", error=str(exc))
+            return None
 
     async def _establish_baseline(self, problem: Problem) -> float | None:
         """Benchmark the reference implementation locally to anchor speedups."""
@@ -441,6 +522,7 @@ class Orchestrator:
         best: CandidateRecord | None,
         profiler: ProfilerFindings | None,
         decision: StrategyDecision,
+        research_plan: ResearchPlan | None = None,
     ) -> CandidateRecord:
         approach = decision.next_approach or (best.approach if best else "pytorch")
         prior = best.candidate.summary if best and best.candidate else ""
@@ -463,6 +545,7 @@ class Orchestrator:
             prior_summary=prior,
             profiler=profiler,
             workload=self._workload,
+            research=research_plan,
         )
         return CandidateRecord(id=cid, approach=approach, workspace=ws, candidate=candidate)
 
