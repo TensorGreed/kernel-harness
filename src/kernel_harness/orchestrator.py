@@ -36,6 +36,7 @@ from pathlib import Path
 from . import evalproto, subagents
 from .agent import AgentRunner, CreditExhaustedError
 from .config import HardwareProfile, RunConfig
+from .ledger import Ledger
 from .problem import Problem, ProblemFetcher
 from .subagents import (
     KernelCandidate,
@@ -180,6 +181,7 @@ class Orchestrator:
         self._stop_event = asyncio.Event()
         self._run_id = time.strftime("%Y%m%d-%H%M%S")
         self._workload: WorkloadProfile | None = None
+        self._ledger: Ledger | None = None
 
     def request_stop(self) -> None:
         """Signal the loop to stop after the current iteration (TUI 'force stop')."""
@@ -225,6 +227,16 @@ class Orchestrator:
             problem=problem.name, reference_ns=reference_ns, brief=brief,
             workload=self._workload,
         )
+
+        # Persistent on-disk experiment ledger — the durable, inspectable record
+        # that reflect/update_library read from disk (survives a crash; bounded
+        # prompt size on long runs; substrate for a future research agent).
+        self._ledger = Ledger(self._runs_dir / self._run_id)
+        self._ledger.write_header(
+            problem=problem.name, brief=brief, gpu=self.config.gpu,
+            reference_ns=reference_ns, workload=self._workload,
+        )
+
         best: CandidateRecord | None = None
         start = time.monotonic()
         it_index = 0
@@ -241,12 +253,13 @@ class Orchestrator:
                 profiler = await self._profile_best(runner, problem, brief, best)
                 it_record.profiler = profiler
                 decision = await subagents.reflect(
-                    runner, brief, render_history(report.iterations, reference_ns)
+                    runner, brief, self._ledger.render()
                 )
                 it_record.decision = decision
                 self.emit("decision", action=decision.action, focus=decision.focus)
                 if decision.action in ("submit", "stop"):
                     report.iterations.append(it_record)
+                    self._ledger.record_iteration_note(it_index, it_record)
                     report.stopped_reason = f"reflection: {decision.action} — {decision.reasoning}"
                     if decision.action == "submit":
                         await self._maybe_submit(problem, best, report)
@@ -270,6 +283,13 @@ class Orchestrator:
             it_record.best_id = best.id if best else None
             report.iterations.append(it_record)
             report.best = best
+
+            # Persist this iteration to the ledger (candidates + any notes).
+            for r in records:
+                self._ledger.record_candidate(
+                    iteration=it_index, record=r, is_best=bool(best and r.id == best.id)
+                )
+            self._ledger.record_iteration_note(it_index, it_record)
 
             # Stop checks: external (TUI), then declared conditions, then safety.
             if self._stop_event.is_set():
@@ -476,7 +496,9 @@ class Orchestrator:
         if self._library is None:
             return
         try:
-            outcome = render_history(report.iterations, report.reference_ns)
+            outcome = self._ledger.render() if self._ledger else render_history(
+                report.iterations, report.reference_ns
+            )
             if report.best:
                 o = report.best.outcome
                 outcome += f"\nbest: {report.best.approach} speedup={o.speedup} passed={o.passed}"
