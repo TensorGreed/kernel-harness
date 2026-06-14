@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Harness runtime artifacts
+runs/
+*.ncu-rep
+*.nsys-rep
+.chroma/
+
+# Secrets
+.env
+
+# OS
+.DS_Store
