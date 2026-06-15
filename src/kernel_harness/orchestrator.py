@@ -229,6 +229,10 @@ class Orchestrator:
         self._run_id = time.strftime("%Y%m%d-%H%M%S")
         self._workload: WorkloadProfile | None = None
         self._ledger: Ledger | None = None
+        # Warm-start: a passing seed becomes a competing iteration-1 candidate;
+        # a failing seed becomes a structural reference for the kernel writers.
+        self._seed_record: CandidateRecord | None = None
+        self._seed_reference: str = ""
 
     def request_stop(self) -> None:
         """Signal the loop to stop after the current iteration (TUI 'force stop')."""
@@ -270,6 +274,9 @@ class Orchestrator:
             runner, brief, self._library_candidates(brief)
         )
 
+        # Warm-start from a user-provided seed kernel, if any.
+        await self._prepare_seed(problem, reference_ns)
+
         report = RunReport(
             problem=problem.name, reference_ns=reference_ns, brief=brief,
             workload=self._workload,
@@ -295,6 +302,9 @@ class Orchestrator:
 
             if it_index == 1:
                 records = await self._iteration_one(runner, problem, brief, knowledge)
+                # A passing seed competes in the pool alongside the cold candidates.
+                if self._seed_record is not None:
+                    records = [self._seed_record] + records
             else:
                 # Profile the best, then decide, then (maybe) a focused rewrite.
                 profiler = await self._profile_best(runner, problem, brief, best)
@@ -328,9 +338,11 @@ class Orchestrator:
                 )
                 records = [record]
 
-            # Authoritative, serial ground-truth evaluation.
+            # Authoritative, serial ground-truth evaluation. The seed was already
+            # evaluated in _prepare_seed — don't re-run it.
             for r in records:
-                r.outcome = self._evaluate(r, problem, reference_ns)
+                if r is not self._seed_record:
+                    r.outcome = self._evaluate(r, problem, reference_ns)
                 self.emit(
                     "candidate_evaluated", id=r.id, approach=r.approach,
                     passed=r.outcome.passed, speedup=r.outcome.speedup,
@@ -491,8 +503,38 @@ class Orchestrator:
             prior_summary=prior_summary,
             profiler=profiler,
             workload=self._workload,
+            seed_reference=self._seed_reference,
         )
         return CandidateRecord(id=cid, approach=approach, workspace=ws, candidate=candidate)
+
+    async def _prepare_seed(self, problem: Problem, reference_ns: float | None) -> None:
+        """Evaluate a user-provided seed kernel. Passing → competing candidate;
+        failing → structural reference for the iteration-1 writers. Never an anchor."""
+        if self.config.seed_kernel is None:
+            return
+        try:
+            code = Path(self.config.seed_kernel).read_text()
+        except OSError as exc:
+            self.emit("seed_error", error=str(exc))
+            return
+
+        ws = self._workspace("seed")
+        ws.mkdir(parents=True, exist_ok=True)
+        (ws / problem.submission_filename).write_text(code)
+        record = CandidateRecord(
+            id="seed", approach="seed", workspace=ws,
+            candidate=KernelCandidate(approach="seed", summary="user-provided seed kernel"),
+        )
+        record.outcome = self._evaluate(record, problem, reference_ns)
+
+        if record.outcome.passed:
+            record.candidate.claimed_passing = True  # type: ignore[union-attr]
+            self._seed_record = record
+            self.emit("seed", status="pass", speedup=record.outcome.speedup)
+        else:
+            # Hand the (failing) seed to the writers as scaffolding to fix/build on.
+            self._seed_reference = code
+            self.emit("seed", status="reference", error=record.outcome.error)
 
     async def _profile_best(
         self,

@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 
 from .config import (
     DEFAULT_BACKEND_ROUTING,
@@ -76,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="fire a ranked leaderboard submission when finished (default: off)",
     )
     run.add_argument("--runs-dir", default="runs", help="where to write per-run workspaces")
+    run.add_argument(
+        "--seed-kernel", default=None,
+        help="path to a starting submission.py (warm-start). Benchmarked and entered as a "
+             "competing candidate if it passes, or used as a structural reference if it fails — "
+             "never an anchor.",
+    )
     run.add_argument(
         "--library-dir", default="library",
         help="cross-hackathon knowledge library directory (default: ./library)",
@@ -152,6 +159,7 @@ def build_run_config(
         auto_submit=args.auto_submit,
         backend_routing=backend_routing,
         local=local,
+        seed_kernel=Path(args.seed_kernel) if getattr(args, "seed_kernel", None) else None,
     )
 
 
@@ -190,6 +198,14 @@ def _make_event_printer():
             emit(f"  {status} {payload['id']} ({payload['approach']}): speedup={spd_s}")
         elif name == "candidate_failed":
             emit(f"  ✗ {payload['approach']} failed: {payload['error']}")
+        elif name == "seed":
+            st = payload.get("status")
+            if st == "pass":
+                spd = payload.get("speedup")
+                emit(f"  [green]seed kernel passed[/] — competing candidate"
+                     + (f" ({spd:.2f}x)" if spd else ""))
+            else:
+                emit(f"  [yellow]seed kernel failed correctness[/] — using as structural reference")
         elif name == "research":
             emit(f"  [magenta]research triggered[/] — {payload.get('trigger','')}")
         elif name == "decision":

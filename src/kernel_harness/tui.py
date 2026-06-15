@@ -59,6 +59,10 @@ def format_log_line(name: str, payload: dict) -> str | None:
             return None  # shown in the table
         case "candidate_failed":
             return f"✗ {payload.get('approach')} failed: {payload.get('error')}"
+        case "seed":
+            if payload.get("status") == "pass":
+                return "seed kernel passed — competing candidate"
+            return "seed kernel failed correctness — using as structural reference"
         case "research":
             return f"research triggered: {payload.get('trigger')}"
         case "decision":

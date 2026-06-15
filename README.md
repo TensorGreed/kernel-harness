@@ -106,6 +106,23 @@ the best kernel's path. Ranked leaderboard submission is **off by default** —
 the report shows the exact `popcorn submit` command, or pass `--auto-submit` to
 fire it automatically.
 
+### Warm-start from your own kernel (`--seed-kernel`)
+
+Bring a starting `submission.py` you wrote interactively (in Claude Code, guided
+by Nsight Copilot, or by hand) and let the harness optimize from it:
+
+```bash
+kernel-harness run -l vectoradd_v2 --stop-on "20iter|2x_reference" \
+  --seed-kernel ./my_kernel.py --approaches triton
+```
+
+The seed is a **competing candidate, never an anchor**: the harness benchmarks it
+itself; if it passes it enters iteration 1's pool (and can be beaten by a fresh
+candidate), and if it fails it's handed to the kernel writers as a structural
+reference to fix and build on. Either way the profile→research→pivot loop can
+walk away from it — so a weak seed can't trap the run. Saves tokens (bring one
+strong candidate, run fewer cold ones) and keeps you in control of the approach.
+
 ### Stopping conditions (`--stop-on`)
 
 Combine with `|`; the loop stops on the first one met:

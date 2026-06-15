@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 
 # --------------------------------------------------------------------------- #
@@ -338,6 +339,11 @@ class RunConfig:
     # finishes. Off by default — a ranked submission is outward-facing, so the
     # user (or TUI) confirms it. The loop still reports the best kernel.
     auto_submit: bool = False
+    # Optional user-provided starting kernel (authored in Claude Code / Nsight /
+    # by hand). It's a *competing candidate*, not an anchor: the harness benchmarks
+    # it; if it passes it joins the iteration-1 pool, if it fails it's handed to the
+    # kernel writers as a structural reference. See CONTEXT.md → "NEXT TASK".
+    seed_kernel: Path | None = None
 
     def model_for(self, subagent: str) -> str:
         """Resolve the model id for a named subagent, defaulting to Opus."""

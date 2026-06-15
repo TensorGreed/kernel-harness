@@ -429,8 +429,18 @@ def build_write_prompt(
     profiler: ProfilerFindings | None = None,
     workload: "WorkloadProfile | None" = None,
     research: "ResearchPlan | None" = None,
+    seed_reference: str = "",
 ) -> str:
     parts = [_brief_block(brief)]
+    if seed_reference.strip():
+        code = seed_reference.strip()
+        if len(code) > 6000:
+            code = code[:6000] + "\n# … (truncated)"
+        parts.append(
+            "\nA user-provided starting kernel is available as a STRUCTURAL REFERENCE "
+            "(it did not pass correctness as-is — treat it as scaffolding to fix/build "
+            f"on, not a working solution):\n```python\n{code}\n```"
+        )
     parts.append(f"\nTarget GPU: {gpu or 'unspecified'}")
     if hardware_notes:
         parts.append(f"Hardware notes: {hardware_notes}")
@@ -578,6 +588,7 @@ async def write_kernel(
     profiler: ProfilerFindings | None = None,
     workload: WorkloadProfile | None = None,
     research: ResearchPlan | None = None,
+    seed_reference: str = "",
     on_text=None,
 ) -> KernelCandidate:
     res = await runner.run_subagent(
@@ -592,6 +603,7 @@ async def write_kernel(
             profiler=profiler,
             workload=workload,
             research=research,
+            seed_reference=seed_reference,
         ),
         system_prompt=SYSTEM_PROMPTS["kernel_writer"],
         allowed_tools=allowed_tools,
